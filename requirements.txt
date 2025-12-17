@@ -5,5 +5,4 @@ gtts
 num2words
 SpeechRecognition
 rapidfuzz
-pydub
 soundfile
