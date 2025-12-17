@@ -47,23 +47,11 @@ if st.sidebar.button("START"):
 st.sidebar.header("🎤 錄音控制")
 if "mic_on" not in st.session_state:
     st.session_state.mic_on = False
+
 if st.sidebar.button("啟動錄音"):
     st.session_state.mic_on = True
-    if "ctx_follow" not in st.session_state:
-        class AudioRecorder(AudioProcessorBase):
-            def __init__(self):
-                self.frames = []
-            def recv(self, frame):
-                self.frames.append(frame.to_ndarray())
-                return frame
-        st.session_state.ctx_follow = webrtc_streamer(
-            key="follow_speech",
-            mode=WebRtcMode.SENDONLY,
-            audio_processor_factory=AudioRecorder,
-            media_stream_constraints={"audio": True, "video": False},
-            async_processing=True
-        )
     st.session_state.frames_follow = []
+    st.session_state.frames_challenge = []
 
 # =========================
 # Utils
@@ -81,7 +69,59 @@ def smart_score(target, result):
     return min(100, fuzz.ratio(target, result) + hit * 5)
 
 # =========================
-# Init Functions
+# TTS 播放
+# =========================
+if "tts_files" not in st.session_state:
+    st.session_state.tts_files = {}
+
+def play_tts(number):
+    if number not in st.session_state.tts_files:
+        word = num2words(number).replace("-", " ")
+        tts = gTTS(word, lang="en")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+            tts.save(f.name)
+            st.session_state.tts_files[number] = f.name
+    st.audio(st.session_state.tts_files[number])
+
+# =========================
+# 初始化 webrtc_streamer
+# =========================
+if "ctx_follow" not in st.session_state:
+    class AudioRecorder(AudioProcessorBase):
+        def __init__(self):
+            self.frames = []
+        def recv(self, frame):
+            if st.session_state.mic_on:
+                self.frames.append(frame.to_ndarray())
+            return frame
+
+    st.session_state.ctx_follow = webrtc_streamer(
+        key="follow_speech",
+        mode=WebRtcMode.SENDONLY,
+        audio_processor_factory=AudioRecorder,
+        media_stream_constraints={"audio": True, "video": False},
+        async_processing=True
+    )
+
+if "ctx_challenge" not in st.session_state:
+    class AudioRecorderC(AudioProcessorBase):
+        def __init__(self):
+            self.frames = []
+        def recv(self, frame):
+            if st.session_state.mic_on:
+                self.frames.append(frame.to_ndarray())
+            return frame
+
+    st.session_state.ctx_challenge = webrtc_streamer(
+        key="challenge_speech",
+        mode=WebRtcMode.SENDONLY,
+        audio_processor_factory=AudioRecorderC,
+        media_stream_constraints={"audio": True, "video": False},
+        async_processing=True
+    )
+
+# =========================
+# 初始化模式
 # =========================
 def init_challenge():
     st.session_state.challenge_numbers = random.sample(range(start_n, end_n + 1), 10)
@@ -90,20 +130,6 @@ def init_challenge():
     st.session_state.challenge_finished = False
     st.session_state.feedback = ""
     st.session_state.last_score = None
-    if "ctx_challenge" not in st.session_state:
-        class AudioRecorder(AudioProcessorBase):
-            def __init__(self):
-                self.frames = []
-            def recv(self, frame):
-                self.frames.append(frame.to_ndarray())
-                return frame
-        st.session_state.ctx_challenge = webrtc_streamer(
-            key="challenge_speech",
-            mode=WebRtcMode.SENDONLY,
-            audio_processor_factory=AudioRecorder,
-            media_stream_constraints={"audio": True, "video": False},
-            async_processing=True
-        )
     st.session_state.frames_challenge = []
 
 def init_follow():
@@ -113,20 +139,6 @@ def init_follow():
     st.session_state.feedback = ""
     st.session_state.last_score = None
     st.session_state.tts_played = False
-    if "ctx_follow" not in st.session_state and st.session_state.mic_on:
-        class AudioRecorder(AudioProcessorBase):
-            def __init__(self):
-                self.frames = []
-            def recv(self, frame):
-                self.frames.append(frame.to_ndarray())
-                return frame
-        st.session_state.ctx_follow = webrtc_streamer(
-            key="follow_speech",
-            mode=WebRtcMode.SENDONLY,
-            audio_processor_factory=AudioRecorder,
-            media_stream_constraints={"audio": True, "video": False},
-            async_processing=True
-        )
     st.session_state.frames_follow = []
 
 # =========================
@@ -142,21 +154,6 @@ if mode == "闖關模式":
 elif mode == "跟讀模式":
     if "follow_numbers" not in st.session_state:
         init_follow()
-
-# =========================
-# TTS 播放
-# =========================
-if "tts_files" not in st.session_state:
-    st.session_state.tts_files = {}
-
-def play_tts(number):
-    if number not in st.session_state.tts_files:
-        word = num2words(number).replace("-", " ")
-        tts = gTTS(word, lang="en")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-            tts.save(f.name)
-            st.session_state.tts_files[number] = f.name
-    st.audio(st.session_state.tts_files[number])
 
 # =========================
 # Mode: 跟讀模式
@@ -177,11 +174,9 @@ if mode == "跟讀模式":
         if st.button("播放老師發音", key=f"play_{current_number}"):
             play_tts(current_number)
 
-    if st.session_state.mic_on:
-        ctx = st.session_state.ctx_follow
-        if ctx.audio_processor:
-            st.session_state.frames_follow += ctx.audio_processor.frames
-            ctx.audio_processor.frames = []
+    if st.session_state.ctx_follow.audio_processor:
+        st.session_state.frames_follow += st.session_state.ctx_follow.audio_processor.frames
+        st.session_state.ctx_follow.audio_processor.frames = []
 
     if st.button("提交錄音", key=f"submit_{current_number}"):
         if st.session_state.mic_on and st.session_state.frames_follow:
@@ -235,11 +230,9 @@ elif mode == "闖關模式":
         if st.button("播放老師發音", key=f"play_ch_{current_number}"):
             play_tts(current_number)
 
-    if st.session_state.mic_on:
-        ctx = st.session_state.ctx_challenge
-        if ctx.audio_processor:
-            st.session_state.frames_challenge += ctx.audio_processor.frames
-            ctx.audio_processor.frames = []
+    if st.session_state.ctx_challenge.audio_processor:
+        st.session_state.frames_challenge += st.session_state.ctx_challenge.audio_processor.frames
+        st.session_state.ctx_challenge.audio_processor.frames = []
 
     if st.button("提交錄音", key=f"submit_ch_{current_number}"):
         if st.session_state.mic_on and st.session_state.frames_challenge:
