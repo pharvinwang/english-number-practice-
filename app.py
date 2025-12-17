@@ -4,7 +4,6 @@ import tempfile
 import os
 import re
 import random
-
 from gtts import gTTS
 from num2words import num2words
 from rapidfuzz import fuzz
@@ -14,8 +13,7 @@ from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
 # =========================
 # Page & CSS
 # =========================
-st.set_page_config(page_title="英文數字闖關", layout="centered")
-
+st.set_page_config(page_title="英文數字練習 v4", layout="centered")
 st.markdown("""
 <style>
 .card {background:#fff;border-radius:20px;padding:24px;margin:16px 0;
@@ -27,25 +25,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 class='center'>🏁 英文數字闖關</h1>", unsafe_allow_html=True)
-st.markdown("<p class='center'>每一關 10 題，一起完成吧！</p>", unsafe_allow_html=True)
+st.markdown("<h1 class='center'>👧 英文數字練習 v4</h1>", unsafe_allow_html=True)
+st.markdown("<p class='center'>選擇模式，開始練習吧！</p>", unsafe_allow_html=True)
 
 # =========================
-# Sidebar
+# Sidebar: 設定
 # =========================
 st.sidebar.header("⚙ 教師設定")
-start_n = st.sidebar.number_input("起始數字", 1, 100, 1)
-end_n = st.sidebar.number_input("結束數字", 1, 100, 20)
+start_n = st.sidebar.number_input("起始數字 N", 1, 100, 1)
+end_n = st.sidebar.number_input("結束數字 S", 1, 100, 20)
 score_good = st.sidebar.slider("🌟 很棒門檻 (%)", 70, 95, 85)
 score_ok = st.sidebar.slider("🙂 接近門檻 (%)", 50, 84, 70)
+
+mode = st.sidebar.radio("選擇模式", ["闖關模式 (隨機 10 題)", "跟讀模式 (逐一 N→S)"])
 
 # =========================
 # Session State Init
 # =========================
 def init_challenge():
-    st.session_state.challenge_numbers = random.sample(
-        list(range(start_n, end_n + 1)), 10
-    )
+    st.session_state.challenge_numbers = random.sample(range(start_n, end_n + 1), 10)
     st.session_state.challenge_index = 0
     st.session_state.challenge_correct = 0
     st.session_state.challenge_finished = False
@@ -53,8 +51,19 @@ def init_challenge():
     st.session_state.last_score = None
     st.session_state.streak = 0
 
-if "challenge_numbers" not in st.session_state:
-    init_challenge()
+def init_follow():
+    st.session_state.follow_numbers = list(range(start_n, end_n + 1))
+    st.session_state.follow_index = 0
+    st.session_state.follow_finished = False
+    st.session_state.feedback = ""
+    st.session_state.last_score = None
+
+if mode == "闖關模式 (隨機 10 題)":
+    if "challenge_numbers" not in st.session_state:
+        init_challenge()
+else:
+    if "follow_numbers" not in st.session_state:
+        init_follow()
 
 # =========================
 # Utils
@@ -72,59 +81,7 @@ def smart_score(target, result):
     return min(100, fuzz.ratio(target, result) + hit * 5)
 
 # =========================
-# Challenge Finished
-# =========================
-if st.session_state.challenge_finished:
-    st.markdown("<div class='card center'>", unsafe_allow_html=True)
-    st.markdown("## 🎉 闖關完成！")
-    st.markdown(
-        f"🌟 成功題數：**{st.session_state.challenge_correct} / 10**"
-    )
-
-    if st.session_state.challenge_correct >= 8:
-        st.markdown("🏆 超厲害！你是英文數字高手！")
-    elif st.session_state.challenge_correct >= 5:
-        st.markdown("⭐ 很棒！繼續加油！")
-    else:
-        st.markdown("💪 沒關係，再玩一關一定更好！")
-
-    if st.button("開始新一關 🚀"):
-        init_challenge()
-
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
-
-# =========================
-# Current Question
-# =========================
-current_number = st.session_state.challenge_numbers[
-    st.session_state.challenge_index
-]
-target_word = num2words(current_number).replace("-", " ")
-
-st.markdown(
-    f"<div class='progress'>第 {st.session_state.challenge_index+1} / 10 題</div>",
-    unsafe_allow_html=True
-)
-
-st.markdown("<div class='card'>", unsafe_allow_html=True)
-st.markdown(f"<div class='big-number'>{current_number}</div>", unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
-
-# =========================
-# TTS
-# =========================
-st.markdown("<div class='card full-btn'>", unsafe_allow_html=True)
-if st.button("🔊 聽老師唸"):
-    tts = gTTS(target_word, lang="en")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-        tts.save(f.name)
-        st.audio(f.name)
-        os.unlink(f.name)
-st.markdown("</div>", unsafe_allow_html=True)
-
-# =========================
-# Recorder
+# Audio Processor
 # =========================
 class AudioRecorder(AudioProcessorBase):
     def __init__(self):
@@ -133,67 +90,139 @@ class AudioRecorder(AudioProcessorBase):
         self.frames.append(frame.to_ndarray())
         return frame
 
-st.markdown("<div class='card'>", unsafe_allow_html=True)
-ctx = webrtc_streamer(
-    key="speech",
-    mode=WebRtcMode.SENDONLY,
-    audio_processor_factory=AudioRecorder,
-    media_stream_constraints={"audio": True, "video": False},
-)
-st.markdown("</div>", unsafe_allow_html=True)
-
 # =========================
-# Speech & Scoring
+# Mode: 闖關模式
 # =========================
-if ctx.audio_processor and not ctx.state.playing:
-    frames = ctx.audio_processor.frames
-    if frames:
-        audio = np.concatenate(frames, axis=0)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-            import soundfile as sf
-            sf.write(f.name, audio, 48000)
-            wav_path = f.name
-
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(wav_path) as src:
-            audio_data = recognizer.record(src)
-
-        try:
-            result = recognizer.recognize_google(audio_data, language="en-US")
-        except:
-            result = ""
-
-        os.unlink(wav_path)
-
-        score = smart_score(target_word, result)
-        st.session_state.last_score = score
-
-        if score >= score_good:
-            st.session_state.feedback = "🌟 太棒了！"
-            st.session_state.challenge_correct += 1
-        elif score >= score_ok:
-            st.session_state.feedback = "🙂 快成功了！"
+if mode == "闖關模式 (隨機 10 題)":
+    if st.session_state.challenge_finished:
+        st.markdown("<div class='card center'>", unsafe_allow_html=True)
+        st.markdown("## 🎉 闖關完成！")
+        st.markdown(f"🌟 成功題數：**{st.session_state.challenge_correct}/10**")
+        if st.session_state.challenge_correct >= 8:
+            st.markdown("🏆 超厲害！")
+        elif st.session_state.challenge_correct >= 5:
+            st.markdown("⭐ 很棒！")
         else:
-            st.session_state.feedback = "💪 再試一次也沒關係！"
+            st.markdown("💪 再接再厲！")
+        if st.button("開始新一關 🚀"):
+            init_challenge()
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
+
+    number = st.session_state.challenge_numbers[st.session_state.challenge_index]
+    target_word = num2words(number).replace("-", " ")
+
+    st.markdown(f"<div class='progress'>第 {st.session_state.challenge_index+1} / 10 題</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><div class='big-number'>{number}</div></div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='card full-btn'>", unsafe_allow_html=True)
+    if st.button("🔊 老師唸"):
+        tts = gTTS(target_word, lang="en")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+            tts.save(f.name)
+            st.audio(f.name)
+            os.unlink(f.name)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    ctx = webrtc_streamer(key="speech", mode=WebRtcMode.SENDONLY, audio_processor_factory=AudioRecorder, media_stream_constraints={"audio": True, "video": False})
+
+    if ctx.audio_processor and not ctx.state.playing:
+        frames = ctx.audio_processor.frames
+        if frames:
+            audio = np.concatenate(frames, axis=0)
+            import soundfile as sf
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+                sf.write(f.name, audio, 48000)
+                wav_path = f.name
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(wav_path) as src:
+                audio_data = recognizer.record(src)
+            try:
+                result = recognizer.recognize_google(audio_data, language="en-US")
+            except:
+                result = ""
+            os.unlink(wav_path)
+            score = smart_score(target_word, result)
+            st.session_state.last_score = score
+            if score >= score_good:
+                st.session_state.feedback = "🌟 太棒了！"
+                st.session_state.challenge_correct += 1
+            elif score >= score_ok:
+                st.session_state.feedback = "🙂 再試一次就好！"
+            else:
+                st.session_state.feedback = "💪 沒關係，再試！"
+
+    st.markdown("<div class='card center'>", unsafe_allow_html=True)
+    if st.session_state.feedback:
+        st.markdown(f"<h2 class='center'>{st.session_state.feedback}</h2>", unsafe_allow_html=True)
+        if st.session_state.last_score is not None:
+            st.markdown(f"<p class='center'>發音接近程度：約 {st.session_state.last_score}%</p>", unsafe_allow_html=True)
+        if st.button("下一題 ➡️"):
+            st.session_state.challenge_index += 1
+            st.session_state.feedback = ""
+            st.session_state.last_score = None
+            if st.session_state.challenge_index >= 10:
+                st.session_state.challenge_finished = True
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# Feedback + Next
+# Mode: 跟讀模式
 # =========================
-st.markdown("<div class='card center'>", unsafe_allow_html=True)
+elif mode == "跟讀模式 (逐一 N→S)":
+    if st.session_state.follow_finished:
+        st.markdown("<div class='card center'>", unsafe_allow_html=True)
+        st.markdown("🎉 跟讀完成！太棒了！")
+        if st.button("重新開始"):
+            init_follow()
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
 
-if st.session_state.feedback:
-    st.markdown(f"## {st.session_state.feedback}")
+    current_number = st.session_state.follow_numbers[st.session_state.follow_index]
+    target_word = num2words(current_number).replace("-", " ")
+    st.markdown(f"### 數字：{current_number}")
 
-    if st.session_state.last_score is not None:
-        st.markdown(f"發音接近程度：約 {st.session_state.last_score}%")
+    st.markdown("<div class='card full-btn'>", unsafe_allow_html=True)
+    if st.button("🔊 老師唸"):
+        tts = gTTS(target_word, lang="en")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+            tts.save(f.name)
+            st.audio(f.name)
+            os.unlink(f.name)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.button("下一題 ➡️"):
-        st.session_state.challenge_index += 1
-        st.session_state.feedback = ""
-        st.session_state.last_score = None
+    ctx = webrtc_streamer(key="follow_speech", mode=WebRtcMode.SENDONLY, audio_processor_factory=AudioRecorder, media_stream_constraints={"audio": True, "video": False})
 
-        if st.session_state.challenge_index >= 10:
-            st.session_state.challenge_finished = True
+    if ctx.audio_processor and not ctx.state.playing:
+        frames = ctx.audio_processor.frames
+        if frames:
+            audio = np.concatenate(frames, axis=0)
+            import soundfile as sf
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+                sf.write(f.name, audio, 48000)
+                wav_path = f.name
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(wav_path) as src:
+                audio_data = recognizer.record(src)
+            try:
+                result = recognizer.recognize_google(audio_data, language="en-US")
+            except:
+                result = ""
+            os.unlink(wav_path)
+            score = smart_score(target_word, result)
+            st.session_state.last_score = score
+            if score >= score_good:
+                st.session_state.feedback = "✅ 正確！"
+                st.session_state.follow_index += 1
+                if st.session_state.follow_index >= len(st.session_state.follow_numbers):
+                    st.session_state.follow_finished = True
+            elif score >= score_ok:
+                st.session_state.feedback = "🙂 再試一次就好！"
+            else:
+                st.session_state.feedback = "💪 沒關係，再試！"
 
-st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("<div class='card center'>", unsafe_allow_html=True)
+    if st.session_state.feedback:
+        st.markdown(f"<h2 class='center'>{st.session_state.feedback}</h2>", unsafe_allow_html=True)
+        if st.session_state.last_score is not None:
+            st.markdown(f"<p class='center'>發音接近程度：約 {st.session_state.last_score}%</p>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
