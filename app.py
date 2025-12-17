@@ -4,7 +4,6 @@ import tempfile
 import os
 import re
 import random
-import time
 from gtts import gTTS
 from num2words import num2words
 from rapidfuzz import fuzz
@@ -14,7 +13,7 @@ from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
 # =========================
 # Page & CSS
 # =========================
-st.set_page_config(page_title="英文數字跟讀 v4.3", layout="centered")
+st.set_page_config(page_title="英文數字跟讀 v4.4", layout="centered")
 st.markdown("""
 <style>
 .card {background:#fff;border-radius:20px;padding:24px;margin:16px 0;box-shadow:0 4px 10px rgba(0,0,0,0.08);}
@@ -25,8 +24,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 class='center'>👧 英文數字跟讀 v4.3</h1>", unsafe_allow_html=True)
-st.markdown("<p class='center'>左側設定 → 按 START → 開始練習</p>", unsafe_allow_html=True)
+st.markdown("<h1 class='center'>👧 英文數字跟讀 v4.4</h1>", unsafe_allow_html=True)
+st.markdown("<p class='center'>左側設定 → 按 START → 每題按播放老師發音 → 跟讀 → 提交</p>", unsafe_allow_html=True)
 
 # =========================
 # Sidebar: 設定 + START
@@ -75,7 +74,6 @@ def init_challenge():
     st.session_state.challenge_finished = False
     st.session_state.feedback = ""
     st.session_state.last_score = None
-    st.session_state.auto_played = False
 
 def init_follow():
     st.session_state.follow_numbers = list(range(start_n, end_n + 1))
@@ -83,7 +81,8 @@ def init_follow():
     st.session_state.follow_finished = False
     st.session_state.feedback = ""
     st.session_state.last_score = None
-    st.session_state.auto_played = False
+    st.session_state.tts_played = False  # 這題老師發音是否已播放
+    st.session_state.audio_submitted = False  # 是否已提交錄音
 
 # =========================
 # START 控制
@@ -100,7 +99,7 @@ else:
     st.stop()
 
 # =========================
-# Mode: 跟讀模式
+# Mode: 跟讀模式（半自動）
 # =========================
 if mode == "跟讀模式":
     if st.session_state.follow_finished:
@@ -114,24 +113,24 @@ if mode == "跟讀模式":
     st.markdown(f"<div class='progress'>數字 {current_number} / {st.session_state.follow_numbers[-1]}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><div class='big-number'>{current_number}</div></div>", unsafe_allow_html=True)
 
-    # 自動播放老師發音
-    if not st.session_state.auto_played:
+    # 按鈕播放老師發音
+    if st.button("播放老師發音"):
         tts = gTTS(target_word, lang="en")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
             tts.save(f.name)
             st.audio(f.name)
             os.unlink(f.name)
-        st.session_state.auto_played = True
+        st.session_state.tts_played = True
 
     # WebRTC 錄音
     ctx = webrtc_streamer(key="follow_speech", mode=WebRtcMode.SENDONLY,
                           audio_processor_factory=AudioRecorder,
                           media_stream_constraints={"audio": True, "video": False})
 
-    # 判斷小朋友發音
-    if ctx.audio_processor and not ctx.state.playing:
-        frames = ctx.audio_processor.frames
-        if frames:
+    # 提交錄音按鈕
+    if st.button("提交錄音"):
+        if ctx.audio_processor and ctx.audio_processor.frames:
+            frames = ctx.audio_processor.frames
             audio = np.concatenate(frames, axis=0)
             import soundfile as sf
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
@@ -149,16 +148,16 @@ if mode == "跟讀模式":
             st.session_state.last_score = score
             if score >= score_good:
                 st.session_state.feedback = "✅ 正確！"
-                # 延遲 1.5 秒再換下一題
-                time.sleep(1.5)
                 st.session_state.follow_index += 1
-                st.session_state.auto_played = False
+                st.session_state.tts_played = False
                 if st.session_state.follow_index >= len(st.session_state.follow_numbers):
                     st.session_state.follow_finished = True
             elif score >= score_ok:
                 st.session_state.feedback = "🙂 再試一次就好！"
             else:
                 st.session_state.feedback = "💪 沒關係，再試！"
+        else:
+            st.session_state.feedback = "⚠️ 尚未錄音或錄音無效！"
 
     # 顯示回饋
     st.markdown("<div class='card center'>", unsafe_allow_html=True)
