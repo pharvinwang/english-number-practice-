@@ -7,33 +7,102 @@ from num2words import num2words
 import random
 from rapidfuzz import fuzz
 import re
+import time
 
-st.set_page_config(page_title="英文數字跟讀練習", layout="wide")
+st.set_page_config(page_title="英文數字跟讀練習", layout="wide", initial_sidebar_state="expanded")
 
 # =========================
-# CSS 樣式
+# CSS 樣式 - 增加動畫效果
 # =========================
 st.markdown("""
 <style>
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-10px); }
+    75% { transform: translateX(10px); }
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+@keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-20px); }
+}
+
 .big-number {
-    font-size: 120px;
+    font-size: 150px;
     text-align: center;
     font-weight: bold;
     color: #2e7d32;
     margin: 30px 0;
+    animation: pulse 2s ease-in-out infinite;
 }
+
 .progress-text {
     text-align: center;
-    font-size: 20px;
+    font-size: 22px;
     color: #666;
     margin: 20px 0;
 }
+
 .feedback-box {
-    padding: 20px;
-    border-radius: 10px;
+    padding: 30px;
+    border-radius: 15px;
     margin: 20px 0;
     text-align: center;
+    font-size: 28px;
+    font-weight: bold;
+}
+
+.blink-text {
+    animation: blink 1s ease-in-out infinite;
+    font-size: 36px;
+    color: #ff6b6b;
+    text-align: center;
+    font-weight: bold;
+    margin: 20px 0;
+}
+
+.recording-indicator {
+    background: linear-gradient(90deg, #ff6b6b, #ee5a6f);
+    color: white;
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
     font-size: 24px;
+    animation: pulse 1s ease-in-out infinite;
+}
+
+.countdown {
+    font-size: 60px;
+    font-weight: bold;
+    color: #ff6b6b;
+    text-align: center;
+    animation: bounce 1s ease-in-out infinite;
+}
+
+.emoji-large {
+    font-size: 80px;
+    text-align: center;
+    animation: bounce 0.5s ease-in-out;
+}
+
+.success-box {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 30px;
+    border-radius: 20px;
+    text-align: center;
+    font-size: 32px;
+    animation: shake 0.5s ease-in-out;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -55,6 +124,12 @@ if "challenge_correct" not in st.session_state:
     st.session_state.challenge_correct = 0
 if "tts_cache" not in st.session_state:
     st.session_state.tts_cache = {}
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
+if "auto_mode" not in st.session_state:
+    st.session_state.auto_mode = False
+if "phase" not in st.session_state:
+    st.session_state.phase = "ready"  # ready, playing, waiting, recording, processing
 
 # =========================
 # 工具函數
@@ -65,19 +140,67 @@ def normalize_text(text):
     text = re.sub(r"[^a-z0-9 ]", "", text)
     return text.strip()
 
-def calculate_score(target, result):
+def calculate_score(target, result, tolerance_level="中等"):
     target = normalize_text(target)
     result = normalize_text(result)
     
-    # 檢查數字是否出現在結果中
-    target_words = target.split()
-    matches = sum(1 for word in target_words if word in result)
+    child_pronunciation_map = {
+        "three": ["tree", "free", "sree"],
+        "thirteen": ["thirty", "thurteen", "firteen"],
+        "thirty": ["thirteen", "thirsty", "turty"],
+        "five": ["fibe", "fife"],
+        "seven": ["seben", "sebun"],
+        "eleven": ["eleben", "levin"],
+        "twelve": ["twelb", "twelf"],
+        "twenty": ["twenny", "twunty"],
+        "fifty": ["fity", "fifthy"],
+        "sixty": ["sickty", "sikty"],
+        "seventy": ["sebenty", "sevunty"],
+        "eighty": ["eity", "eitty"],
+        "ninety": ["ninty", "ninity"],
+    }
     
-    # 計算相似度分數
-    base_score = fuzz.ratio(target, result)
-    bonus = matches * 10
-    
-    return min(100, base_score + bonus)
+    if tolerance_level == "寬鬆":
+        target_words = target.split()
+        result_words = result.split()
+        
+        for target_word in target_words:
+            if target_word in result_words:
+                return 100
+            if target_word in child_pronunciation_map:
+                for similar in child_pronunciation_map[target_word]:
+                    if similar in result:
+                        return 95
+        
+        matches = sum(1 for word in target_words if word in result)
+        if matches > 0:
+            return 80 + (matches * 5)
+        
+        base_score = fuzz.ratio(target, result)
+        return min(100, base_score + 15)
+        
+    elif tolerance_level == "中等":
+        target_words = target.split()
+        matches = sum(1 for word in target_words if word in result)
+        
+        tolerance_bonus = 0
+        for target_word in target_words:
+            if target_word in child_pronunciation_map:
+                for similar in child_pronunciation_map[target_word]:
+                    if similar in result:
+                        tolerance_bonus += 10
+                        break
+        
+        base_score = fuzz.ratio(target, result)
+        bonus = matches * 10
+        return min(100, base_score + bonus + tolerance_bonus)
+        
+    else:
+        target_words = target.split()
+        matches = sum(1 for word in target_words if word in result)
+        base_score = fuzz.ratio(target, result)
+        bonus = matches * 5
+        return min(100, base_score + bonus)
 
 def get_number_word(number):
     return num2words(number).replace("-", " ")
@@ -91,24 +214,47 @@ def generate_tts(number):
         st.session_state.tts_cache[number] = tmp_file.name
     return st.session_state.tts_cache[number]
 
-def process_audio(audio_bytes, target_word, score_good, score_ok):
-    """處理音頻並返回結果"""
-    # 儲存音頻為臨時文件
+def get_encouragement():
+    """隨機返回鼓勵語"""
+    encouragements = [
+        ("💪 沒關係，再接再厲！", "🌈"),
+        ("🎈 很棒的嘗試！我們再來一次！", "⭐"),
+        ("🌟 你可以的！再試試看！", "🎯"),
+        ("🎨 很好！讓我們再練習一次！", "🚀"),
+        ("🎵 加油！你會越來越好的！", "💖"),
+        ("🌺 別氣餒！每次練習都是進步！", "🎪"),
+        ("🎭 太棒了！讓我們繼續努力！", "🎡"),
+        ("🎪 很不錯！再來挑戰一次！", "🌸"),
+    ]
+    return random.choice(encouragements)
+
+def get_success_message():
+    """隨機返回成功訊息"""
+    messages = [
+        ("🎉 太棒了！", "你真是個天才！"),
+        ("⭐ 完美！", "發音超級標準！"),
+        ("🏆 超級厲害！", "你是英文小高手！"),
+        ("🌟 優秀！", "繼續保持！"),
+        ("💯 滿分！", "你太強了！"),
+        ("🎯 正中目標！", "發音非常清楚！"),
+        ("👏 掌聲鼓勵！", "你做得很好！"),
+        ("🌈 精彩！", "你的發音真棒！"),
+    ]
+    return random.choice(messages)
+
+def process_audio(audio_bytes, target_word, score_good, score_ok, tolerance_level):
     tmp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     tmp_audio.write(audio_bytes)
     tmp_audio.close()
     
-    # 語音辨識
     recognizer = sr.Recognizer()
     try:
         with sr.AudioFile(tmp_audio.name) as source:
             audio = recognizer.record(source)
             result = recognizer.recognize_google(audio, language="en-US")
             
-            # 計算分數
-            score = calculate_score(target_word, result)
+            score = calculate_score(target_word, result, tolerance_level)
             
-            # 判斷結果
             if score >= score_good:
                 feedback = "correct"
                 is_correct = True
@@ -141,18 +287,59 @@ end_n = st.sidebar.number_input("結束數字 S", min_value=1, max_value=100, va
 if start_n > end_n:
     st.sidebar.error("起始數字不能大於結束數字！")
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("⏱️ 錄音設定")
+
+recording_duration = st.sidebar.slider(
+    "錄音時間（秒）",
+    min_value=2,
+    max_value=10,
+    value=4,
+    help="小朋友發音的錄音時長"
+)
+
+wait_after_teacher = st.sidebar.slider(
+    "老師發音後等待（秒）",
+    min_value=0.5,
+    max_value=3.0,
+    value=1.0,
+    step=0.5,
+    help="老師發音結束後，等待多久提示小朋友開始"
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📊 評分設定")
+
 score_good = st.sidebar.slider("🌟 很棒門檻 (%)", 70, 95, 85)
 score_ok = st.sidebar.slider("🙂 接近門檻 (%)", 50, 90, 70)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("👶 兒童友善設定")
+
+tolerance_level = st.sidebar.select_slider(
+    "容錯等級",
+    options=["嚴格", "中等", "寬鬆"],
+    value="中等",
+    help="調整對發音不準確的容忍度"
+)
+
+tolerance_descriptions = {
+    "寬鬆": "🟢 最適合幼兒（3-6歲）",
+    "中等": "🟡 適合小學生（7-10歲）",
+    "嚴格": "🔴 適合高年級（11歲以上）"
+}
+
+st.sidebar.info(tolerance_descriptions[tolerance_level])
 
 mode = st.sidebar.radio("選擇模式", ["跟讀模式", "闖關模式"])
 
 st.sidebar.markdown("---")
 
 # 初始化按鈕
-if st.sidebar.button("🚀 開始練習", type="primary"):
+if st.sidebar.button("🚀 開始練習", type="primary", use_container_width=True):
     if mode == "跟讀模式":
         st.session_state.numbers_list = list(range(start_n, end_n + 1))
-    else:  # 闖關模式
+    else:
         st.session_state.numbers_list = random.sample(
             range(start_n, end_n + 1), 
             min(10, end_n - start_n + 1)
@@ -162,42 +349,69 @@ if st.sidebar.button("🚀 開始練習", type="primary"):
     st.session_state.last_score = None
     st.session_state.mode = mode
     st.session_state.challenge_correct = 0
+    st.session_state.phase = "ready"
 
 # =========================
 # 主要區域
 # =========================
-st.title("👧 英文數字跟讀練習 v5.1")
-st.caption("使用 Streamlit 原生錄音功能 - 更穩定可靠")
+st.title("🎯 英文數字跟讀練習 v6.0")
+st.caption("✨ 全自動互動版 - 讓學習更有趣！")
 
 # 檢查是否已開始
 if not st.session_state.numbers_list:
-    st.info("👈 請先在左側設定參數，然後按「開始練習」")
+    st.markdown("""
+    <div style='text-align: center; padding: 50px;'>
+        <div style='font-size: 80px; margin-bottom: 20px;'>🎮</div>
+        <h2>準備好開始練習了嗎？</h2>
+        <p style='font-size: 20px; color: #666;'>👈 請先在左側設定參數，然後按「開始練習」</p>
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # 檢查是否完成
 if st.session_state.current_index >= len(st.session_state.numbers_list):
     st.balloons()
-    st.success("🎉 恭喜完成！")
+    
+    st.markdown("""
+    <div class='success-box'>
+        <div style='font-size: 100px; margin-bottom: 20px;'>🏆</div>
+        <div>恭喜完成所有練習！</div>
+    </div>
+    """, unsafe_allow_html=True)
     
     if st.session_state.mode == "闖關模式":
-        st.markdown(f"### 成績: {st.session_state.challenge_correct} / {len(st.session_state.numbers_list)} 題正確")
-        
         percentage = (st.session_state.challenge_correct / len(st.session_state.numbers_list)) * 100
+        
+        col1, col2, col3 = st.columns(3)
+        with col2:
+            st.markdown(f"""
+            <div style='text-align: center; padding: 30px; background: #f0f2f6; border-radius: 15px; margin: 20px 0;'>
+                <div style='font-size: 24px; color: #666; margin-bottom: 10px;'>最終成績</div>
+                <div style='font-size: 60px; font-weight: bold; color: #2e7d32;'>{st.session_state.challenge_correct} / {len(st.session_state.numbers_list)}</div>
+                <div style='font-size: 20px; color: #666; margin-top: 10px;'>{percentage:.0f}% 正確率</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
         if percentage >= 80:
-            st.markdown("🏆 **超級棒！你是英文數字高手！**")
+            st.markdown("<div class='emoji-large'>🌟🌟🌟</div>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align: center;'>超級棒！你是英文數字高手！</h2>", unsafe_allow_html=True)
         elif percentage >= 60:
-            st.markdown("⭐ **很好！繼續加油！**")
+            st.markdown("<div class='emoji-large'>⭐⭐</div>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align: center;'>很好！繼續加油！</h2>", unsafe_allow_html=True)
         else:
-            st.markdown("💪 **不錯！多練習就會更好！**")
-    else:
-        st.markdown(f"### 完成 {len(st.session_state.numbers_list)} 個數字的跟讀練習！")
+            st.markdown("<div class='emoji-large'>💪</div>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align: center;'>不錯！多練習就會更好！</h2>", unsafe_allow_html=True)
     
-    if st.button("🔄 重新開始"):
-        st.session_state.numbers_list = []
-        st.session_state.current_index = 0
-        st.session_state.feedback = ""
-        st.session_state.challenge_correct = 0
-        st.rerun()
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔄 重新開始", use_container_width=True, type="primary"):
+            st.session_state.numbers_list = []
+            st.session_state.current_index = 0
+            st.session_state.feedback = ""
+            st.session_state.challenge_correct = 0
+            st.session_state.last_result = None
+            st.session_state.phase = "ready"
+            st.rerun()
     
     st.stop()
 
@@ -207,104 +421,192 @@ target_word = get_number_word(current_number)
 
 # 顯示進度
 if st.session_state.mode == "跟讀模式":
-    progress_text = f"數字 {st.session_state.current_index + 1} / {len(st.session_state.numbers_list)}"
+    progress_text = f"📚 數字 {st.session_state.current_index + 1} / {len(st.session_state.numbers_list)}"
 else:
-    progress_text = f"題目 {st.session_state.current_index + 1} / {len(st.session_state.numbers_list)}"
+    progress_text = f"🎯 題目 {st.session_state.current_index + 1} / {len(st.session_state.numbers_list)}"
 
 st.markdown(f"<div class='progress-text'>{progress_text}</div>", unsafe_allow_html=True)
 
 # 顯示數字
 st.markdown(f"<div class='big-number'>{current_number}</div>", unsafe_allow_html=True)
 
-# 播放老師發音
+# 一鍵練習按鈕
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    if st.button("🔊 播放老師發音", use_container_width=True, key="play_button"):
+    if st.button("🎤 開始練習這個數字", use_container_width=True, type="primary", key="start_practice"):
+        st.session_state.phase = "playing"
         audio_file = generate_tts(current_number)
         st.audio(audio_file, format="audio/mp3", autoplay=True)
+        time.sleep(wait_after_teacher)
+        st.session_state.phase = "waiting"
+        st.rerun()
 
-st.markdown("---")
-
-# 使用 Streamlit 原生錄音功能
-st.markdown("### 🎤 錄音並提交")
-
-col_a, col_b, col_c = st.columns([1, 3, 1])
-with col_b:
-    audio_bytes = st.audio_input("點擊錄音按鈕開始", key=f"audio_{current_number}")
-
-if audio_bytes:
-    st.success("✅ 已錄音完成！")
+# 根據不同階段顯示提示
+if st.session_state.phase == "waiting":
+    st.markdown("""
+    <div class='blink-text'>
+        🎙️ 換你練習囉！請開始說話！
+    </div>
+    """, unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🎯 提交並判斷", type="primary", use_container_width=True):
-            with st.spinner("正在辨識中..."):
-                feedback, score, is_correct, result = process_audio(
-                    audio_bytes.getvalue(), 
-                    target_word, 
-                    score_good, 
-                    score_ok
-                )
-                
-                st.session_state.feedback = feedback
-                st.session_state.last_score = score
-                
-                if is_correct:
-                    st.session_state.challenge_correct += 1
-                    st.session_state.current_index += 1
-                
-                st.rerun()
+    st.markdown(f"""
+    <div style='text-align: center; margin: 20px 0;'>
+        <div style='font-size: 24px; color: #666; margin-bottom: 15px;'>
+            請在 {recording_duration} 秒內清楚唸出數字
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 顯示錄音介面
+    col_a, col_b, col_c = st.columns([1, 3, 1])
+    with col_b:
+        audio_bytes = st.audio_input(
+            f"🔴 錄音中... (建議錄 {recording_duration} 秒)",
+            key=f"audio_{current_number}_{st.session_state.current_index}"
+        )
+    
+    if audio_bytes:
+        st.success("✅ 錄音完成！正在辨識中...")
+        
+        with st.spinner("🔍 正在判斷你的發音..."):
+            feedback, score, is_correct, result = process_audio(
+                audio_bytes.getvalue(), 
+                target_word, 
+                score_good, 
+                score_ok,
+                tolerance_level
+            )
+            
+            st.session_state.feedback = feedback
+            st.session_state.last_score = score
+            st.session_state.last_result = result
+            st.session_state.phase = "result"
+            
+            if is_correct:
+                st.session_state.challenge_correct += 1
+            
+            st.rerun()
 
-# 顯示回饋
-if st.session_state.feedback:
+# 顯示結果
+if st.session_state.phase == "result":
     st.markdown("---")
     
-    feedback_map = {
-        "correct": ("🌟 太棒了！發音正確！", "#d4edda", "✅"),
-        "close": ("🙂 很接近了！再試一次看看～", "#fff3cd", "🔄"),
-        "retry": ("💪 沒關係，再聽一次老師的發音試試！", "#cce5ff", "🔄"),
-        "unclear": ("❓ 聽不清楚，請靠近麥克風再試一次", "#f8d7da", "🎤"),
-        "error": ("⚠️ 語音辨識服務暫時無法使用", "#f8d7da", "🔄")
-    }
-    
-    if st.session_state.feedback in feedback_map:
-        msg, color, icon = feedback_map[st.session_state.feedback]
-        st.markdown(
-            f"<div class='feedback-box' style='background-color: {color};'>"
-            f"{icon} {msg}"
-            f"</div>",
-            unsafe_allow_html=True
-        )
+    if st.session_state.feedback == "correct":
+        emoji, msg = get_success_message()
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                    color: white; padding: 40px; border-radius: 20px; 
+                    text-align: center; margin: 20px 0;'>
+            <div style='font-size: 100px; margin-bottom: 20px;'>{emoji}</div>
+            <div style='font-size: 36px; font-weight: bold; margin-bottom: 10px;'>{msg}</div>
+            <div style='font-size: 24px;'>發音相似度: {st.session_state.last_score}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("➡️ 下一個數字", use_container_width=True, type="primary"):
+                st.session_state.current_index += 1
+                st.session_state.feedback = ""
+                st.session_state.last_score = None
+                st.session_state.last_result = None
+                st.session_state.phase = "ready"
+                st.rerun()
+                
+    else:
+        encouragement, emoji = get_encouragement()
+        
+        if st.session_state.feedback == "close":
+            color = "#fff3cd"
+            border_color = "#ffc107"
+            icon = "🙂"
+        else:
+            color = "#cce5ff"
+            border_color = "#0066cc"
+            icon = "💪"
+        
+        st.markdown(f"""
+        <div style='background: {color}; padding: 40px; border-radius: 20px; 
+                    text-align: center; margin: 20px 0; border: 3px solid {border_color};'>
+            <div style='font-size: 80px; margin-bottom: 20px;'>{icon}</div>
+            <div style='font-size: 32px; font-weight: bold; color: #333; margin-bottom: 15px;'>{encouragement}</div>
+            <div style='font-size: 60px; margin: 20px 0;'>{emoji}</div>
+        </div>
+        """, unsafe_allow_html=True)
         
         if st.session_state.last_score is not None:
-            st.markdown(f"**發音相似度: {st.session_state.last_score}%**")
+            st.markdown(f"""
+            <div style='text-align: center; font-size: 20px; color: #666; margin: 10px 0;'>
+                發音相似度: {st.session_state.last_score}%
+            </div>
+            """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 再試一次", use_container_width=True, type="secondary"):
+                st.session_state.feedback = ""
+                st.session_state.last_score = None
+                st.session_state.last_result = None
+                st.session_state.phase = "ready"
+                st.rerun()
+        
+        with col2:
+            if st.button("⏭️ 跳過這題", use_container_width=True):
+                st.session_state.current_index += 1
+                st.session_state.feedback = ""
+                st.session_state.last_score = None
+                st.session_state.last_result = None
+                st.session_state.phase = "ready"
+                st.rerun()
+        
+        # 顯示辨識結果
+        if st.session_state.last_result:
+            with st.expander("🔍 查看辨識詳情"):
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.info(f"**目標發音:**\n\n`{target_word}`")
+                with col_b:
+                    st.success(f"**系統聽到:**\n\n`{st.session_state.last_result}`")
 
-# 跳過按鈕（只在跟讀模式且未正確時顯示）
-if st.session_state.mode == "跟讀模式" and st.session_state.feedback != "correct":
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("⏭️ 跳過這題", use_container_width=True):
-            st.session_state.current_index += 1
-            st.session_state.feedback = ""
-            st.session_state.last_score = None
-            st.rerun()
+# 可愛提示區
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%); 
+            border-radius: 15px; margin: 20px 0;'>
+    <div style='font-size: 40px; margin-bottom: 10px;'>💡</div>
+    <div style='font-size: 18px; color: #333;'>
+        <b>小提示：</b>錄音時請靠近麥克風，清楚地唸出數字哦！
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # 使用說明
 with st.expander("📖 使用說明"):
     st.markdown("""
-    ### 操作步驟：
-    1. **設定參數**：在左側設定起始/結束數字和評分門檻
-    2. **選擇模式**：
-       - **跟讀模式**：依序練習 N 到 S 的所有數字
-       - **闖關模式**：隨機 10 題挑戰
-    3. **開始練習**：點擊「🚀 開始練習」
-    4. **播放發音**：點擊「🔊 播放老師發音」聽標準發音
-    5. **錄音**：點擊麥克風按鈕開始錄音，再次點擊結束
-    6. **提交**：點擊「🎯 提交並判斷」進行評分
+    ### 🎮 操作流程：
     
-    ### 提示：
-    - 建議使用 Chrome 或 Edge 瀏覽器
-    - 首次使用需允許瀏覽器麥克風權限
-    - 錄音時請靠近麥克風，清楚發音
-    - 跟讀模式可使用「跳過」功能
+    1. **設定參數** → 在左側調整數字範圍、錄音時間、容錯等級
+    2. **開始練習** → 點擊「🚀 開始練習」
+    3. **點擊練習** → 點擊「🎤 開始練習這個數字」
+    4. **聽老師發音** → 系統自動播放標準發音
+    5. **準備好了** → 看到「換你練習囉！」提示
+    6. **開始錄音** → 點擊麥克風按鈕，清楚唸出數字
+    7. **自動判斷** → 系統自動辨識並給分
+    8. **看結果** → 如果正確就進入下一題，不正確可以再試
+    
+    ### ⚙️ 參數說明：
+    
+    - **錄音時間**：建議 3-5 秒，太短可能錄不完整
+    - **等待時間**：老師發音後等待多久提示開始，建議 1 秒
+    - **容錯等級**：
+      - 🟢 寬鬆：幼兒友善，允許發音錯誤
+      - 🟡 中等：小學生適用
+      - 🔴 嚴格：高年級使用
+    
+    ### 💡 小技巧：
+    
+    - 練習前先測試麥克風
+    - 找一個安靜的環境
+    - 發音要清楚，不要太快也不要太慢
+    - 看到鼓勵訊息不要灰心，繼續加油！
     """)
