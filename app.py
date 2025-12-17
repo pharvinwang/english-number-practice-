@@ -2,8 +2,6 @@ import streamlit as st
 from gtts import gTTS
 import os
 import tempfile
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
-import numpy as np
 import speech_recognition as sr
 from num2words import num2words
 import random
@@ -43,8 +41,6 @@ st.markdown("""
 # =========================
 # Session State 初始化
 # =========================
-if "mic_enabled" not in st.session_state:
-    st.session_state.mic_enabled = False
 if "numbers_list" not in st.session_state:
     st.session_state.numbers_list = []
 if "current_index" not in st.session_state:
@@ -95,19 +91,44 @@ def generate_tts(number):
         st.session_state.tts_cache[number] = tmp_file.name
     return st.session_state.tts_cache[number]
 
-# =========================
-# 音頻處理器
-# =========================
-class AudioProcessor(AudioProcessorBase):
-    def __init__(self):
-        self.frames = []
-        self.is_recording = False
+def process_audio(audio_bytes, target_word, score_good, score_ok):
+    """處理音頻並返回結果"""
+    # 儲存音頻為臨時文件
+    tmp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    tmp_audio.write(audio_bytes)
+    tmp_audio.close()
     
-    def recv(self, frame):
-        if self.is_recording:
-            audio = frame.to_ndarray()
-            self.frames.append(audio)
-        return frame
+    # 語音辨識
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(tmp_audio.name) as source:
+            audio = recognizer.record(source)
+            result = recognizer.recognize_google(audio, language="en-US")
+            
+            # 計算分數
+            score = calculate_score(target_word, result)
+            
+            # 判斷結果
+            if score >= score_good:
+                feedback = "correct"
+                is_correct = True
+            elif score >= score_ok:
+                feedback = "close"
+                is_correct = False
+            else:
+                feedback = "retry"
+                is_correct = False
+                
+            return feedback, score, is_correct, result
+            
+    except sr.UnknownValueError:
+        return "unclear", None, False, None
+    except sr.RequestError:
+        return "error", None, False, None
+    except Exception as e:
+        return "error", None, False, str(e)
+    finally:
+        os.unlink(tmp_audio.name)
 
 # =========================
 # 側邊欄設定
@@ -141,23 +162,16 @@ if st.sidebar.button("🚀 開始練習", type="primary"):
     st.session_state.last_score = None
     st.session_state.mode = mode
     st.session_state.challenge_correct = 0
-    st.session_state.mic_enabled = False
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🎤 錄音狀態")
-if st.session_state.mic_enabled:
-    st.sidebar.success("✅ 錄音已啟用")
-else:
-    st.sidebar.info("請先允許麥克風權限")
 
 # =========================
 # 主要區域
 # =========================
-st.title("👧 英文數字跟讀練習 v5.0")
+st.title("👧 英文數字跟讀練習 v5.1")
+st.caption("使用 Streamlit 原生錄音功能 - 更穩定可靠")
 
 # 檢查是否已開始
 if not st.session_state.numbers_list:
-    st.info("👈 請先在左側設定參數,然後按「開始練習」")
+    st.info("👈 請先在左側設定參數，然後按「開始練習」")
     st.stop()
 
 # 檢查是否完成
@@ -205,84 +219,41 @@ st.markdown(f"<div class='big-number'>{current_number}</div>", unsafe_allow_html
 # 播放老師發音
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    if st.button("🔊 播放老師發音", use_container_width=True):
+    if st.button("🔊 播放老師發音", use_container_width=True, key="play_button"):
         audio_file = generate_tts(current_number)
-        st.audio(audio_file)
+        st.audio(audio_file, format="audio/mp3", autoplay=True)
 
 st.markdown("---")
 
-# WebRTC 音頻流
-st.markdown("### 🎤 開始錄音")
-st.info("點擊下方的 START 按鈕開始錄音，點擊 STOP 結束錄音")
+# 使用 Streamlit 原生錄音功能
+st.markdown("### 🎤 錄音並提交")
 
-webrtc_ctx = webrtc_streamer(
-    key="speech-recording",
-    mode=WebRtcMode.SENDONLY,
-    audio_processor_factory=AudioProcessor,
-    media_stream_constraints={"audio": True, "video": False},
-    async_processing=True,
-)
+col_a, col_b, col_c = st.columns([1, 3, 1])
+with col_b:
+    audio_bytes = st.audio_input("點擊錄音按鈕開始", key=f"audio_{current_number}")
 
-# 更新錄音狀態
-if webrtc_ctx.state.playing:
-    st.session_state.mic_enabled = True
-    if webrtc_ctx.audio_processor:
-        webrtc_ctx.audio_processor.is_recording = True
-else:
-    if webrtc_ctx.audio_processor:
-        webrtc_ctx.audio_processor.is_recording = False
-
-# 提交錄音按鈕
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    if st.button("✅ 提交錄音", type="primary", use_container_width=True):
-        if webrtc_ctx.audio_processor and len(webrtc_ctx.audio_processor.frames) > 0:
-            # 合併音頻數據
-            audio_data = np.concatenate(webrtc_ctx.audio_processor.frames, axis=0)
-            
-            # 轉換為單聲道
-            if len(audio_data.shape) > 1:
-                audio_data = audio_data.mean(axis=1)
-            
-            # 儲存為 WAV 文件
-            import soundfile as sf
-            tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            sf.write(tmp_wav.name, audio_data, 48000)
-            tmp_wav.close()
-            
-            # 語音辨識
-            recognizer = sr.Recognizer()
-            try:
-                with sr.AudioFile(tmp_wav.name) as source:
-                    audio = recognizer.record(source)
-                    result = recognizer.recognize_google(audio, language="en-US")
-                    
-                    # 計算分數
-                    score = calculate_score(target_word, result)
-                    st.session_state.last_score = score
-                    
-                    # 判斷結果
-                    if score >= score_good:
-                        st.session_state.feedback = "correct"
-                        st.session_state.challenge_correct += 1
-                        st.session_state.current_index += 1
-                    elif score >= score_ok:
-                        st.session_state.feedback = "close"
-                    else:
-                        st.session_state.feedback = "retry"
-                    
-            except sr.UnknownValueError:
-                st.session_state.feedback = "unclear"
-            except sr.RequestError:
-                st.session_state.feedback = "error"
-            finally:
-                os.unlink(tmp_wav.name)
-            
-            # 清空錄音緩存
-            webrtc_ctx.audio_processor.frames = []
-            st.rerun()
-        else:
-            st.warning("⚠️ 請先錄音再提交！")
+if audio_bytes:
+    st.success("✅ 已錄音完成！")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🎯 提交並判斷", type="primary", use_container_width=True):
+            with st.spinner("正在辨識中..."):
+                feedback, score, is_correct, result = process_audio(
+                    audio_bytes.getvalue(), 
+                    target_word, 
+                    score_good, 
+                    score_ok
+                )
+                
+                st.session_state.feedback = feedback
+                st.session_state.last_score = score
+                
+                if is_correct:
+                    st.session_state.challenge_correct += 1
+                    st.session_state.current_index += 1
+                
+                st.rerun()
 
 # 顯示回饋
 if st.session_state.feedback:
@@ -308,7 +279,7 @@ if st.session_state.feedback:
         if st.session_state.last_score is not None:
             st.markdown(f"**發音相似度: {st.session_state.last_score}%**")
 
-# 跳過按鈕（只在跟讀模式顯示）
+# 跳過按鈕（只在跟讀模式且未正確時顯示）
 if st.session_state.mode == "跟讀模式" and st.session_state.feedback != "correct":
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -317,3 +288,23 @@ if st.session_state.mode == "跟讀模式" and st.session_state.feedback != "cor
             st.session_state.feedback = ""
             st.session_state.last_score = None
             st.rerun()
+
+# 使用說明
+with st.expander("📖 使用說明"):
+    st.markdown("""
+    ### 操作步驟：
+    1. **設定參數**：在左側設定起始/結束數字和評分門檻
+    2. **選擇模式**：
+       - **跟讀模式**：依序練習 N 到 S 的所有數字
+       - **闖關模式**：隨機 10 題挑戰
+    3. **開始練習**：點擊「🚀 開始練習」
+    4. **播放發音**：點擊「🔊 播放老師發音」聽標準發音
+    5. **錄音**：點擊麥克風按鈕開始錄音，再次點擊結束
+    6. **提交**：點擊「🎯 提交並判斷」進行評分
+    
+    ### 提示：
+    - 建議使用 Chrome 或 Edge 瀏覽器
+    - 首次使用需允許瀏覽器麥克風權限
+    - 錄音時請靠近麥克風，清楚發音
+    - 跟讀模式可使用「跳過」功能
+    """)
