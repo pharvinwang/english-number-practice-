@@ -1,269 +1,127 @@
+# app.py v4.7 完整修正版
 import streamlit as st
-import numpy as np
-import tempfile
-import os
-import re
-import random
 from gtts import gTTS
-from num2words import num2words
-from rapidfuzz import fuzz
+import os
+import tempfile
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
+import numpy as np
 import speech_recognition as sr
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
 
-# =========================
-# Page & CSS
-# =========================
-st.set_page_config(page_title="英文數字跟讀 v4.6", layout="centered")
-st.markdown("""
-<style>
-.card {background:#fff;border-radius:20px;padding:24px;margin:16px 0;box-shadow:0 4px 10px rgba(0,0,0,0.08);}
-.big-number {font-size:110px;text-align:center;font-weight:bold;}
-.center {text-align:center;}
-.progress {font-size:18px;text-align:center;color:#555;}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="英文數字跟讀", layout="wide")
 
-st.markdown("<h1 class='center'>👧 英文數字跟讀 v4.6</h1>", unsafe_allow_html=True)
-st.markdown("<p class='center'>左側設定 → 啟動錄音 → 播放老師發音 → 跟讀 → 提交</p>", unsafe_allow_html=True)
-
-# =========================
-# Sidebar: 設定 + START
-# =========================
-st.sidebar.header("⚙ 教師設定")
-start_n = st.sidebar.number_input("起始數字 N", 1, 100, 1)
-end_n = st.sidebar.number_input("結束數字 S", 1, 100, 20)
-score_good = st.sidebar.slider("🌟 很棒門檻 (%)", 70, 95, 85)
-score_ok = st.sidebar.slider("🙂 接近門檻 (%)", 50, 84, 70)
-mode = st.sidebar.radio("選擇模式", ["闖關模式", "跟讀模式"])
-
-if "start_pressed" not in st.session_state:
-    st.session_state.start_pressed = False
-if st.sidebar.button("START"):
-    st.session_state.start_pressed = True
-
-# =========================
-# Sidebar: 錄音控制
-# =========================
-st.sidebar.header("🎤 錄音控制")
+# -----------------------------
+# SESSION STATE INIT
+# -----------------------------
 if "mic_on" not in st.session_state:
     st.session_state.mic_on = False
+if "current_number" not in st.session_state:
+    st.session_state.current_number = 0
+if "numbers_list" not in st.session_state:
+    st.session_state.numbers_list = []
 
+# -----------------------------
+# SIDEBAR: TEACHER SETTINGS
+# -----------------------------
+st.sidebar.header("👨‍🏫 教師設定")
+start_num = st.sidebar.number_input("起始數字 N", min_value=1, max_value=100, value=1)
+end_num = st.sidebar.number_input("結束數字 S", min_value=1, max_value=100, value=20)
+threshold_high = st.sidebar.slider("🌟 很棒門檻 (%)", 70, 95, 85)
+threshold_low = st.sidebar.slider("🙂 接近門檻 (%)", 50, 90, 70)
+
+mode = st.sidebar.radio("選擇模式", ["闖關模式", "跟讀模式"])
+
+if "numbers_list" not in st.session_state or st.session_state.numbers_list != list(range(start_num, end_num+1)):
+    st.session_state.numbers_list = list(range(start_num, end_num+1))
+    st.session_state.current_number = 0
+
+st.sidebar.header("🎤 錄音控制")
 if st.sidebar.button("啟動錄音"):
     st.session_state.mic_on = True
-    st.session_state.frames_follow = []
-    st.session_state.frames_challenge = []
+    st.success("錄音已啟動，請允許瀏覽器使用麥克風。")
 
-# =========================
-# Utils
-# =========================
-def normalize(text):
-    text = text.lower()
-    text = re.sub(r"[-]", " ", text)
-    text = re.sub(r"[^a-z ]", "", text)
-    return text.strip()
+# -----------------------------
+# WEBRTC INITIALIZATION
+# -----------------------------
+class AudioRecorder(AudioProcessorBase):
+    def __init__(self):
+        self.frames = []
 
-def smart_score(target, result):
-    target = normalize(target)
-    result = normalize(result)
-    hit = sum(1 for w in target.split() if w in result)
-    return min(100, fuzz.ratio(target, result) + hit * 5)
+    def recv(self, frame):
+        if st.session_state.mic_on:
+            self.frames.append(frame.to_ndarray())
+        return frame
 
-# =========================
-# TTS 播放
-# =========================
-if "tts_files" not in st.session_state:
-    st.session_state.tts_files = {}
+ctx = webrtc_streamer(
+    key="mic",
+    mode=WebRtcMode.SENDONLY,
+    audio_processor_factory=AudioRecorder,
+    media_stream_constraints={"audio": True, "video": False},
+    async_processing=True
+)
 
-def play_tts(number):
-    if number not in st.session_state.tts_files:
-        word = num2words(number).replace("-", " ")
-        tts = gTTS(word, lang="en")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-            tts.save(f.name)
-            st.session_state.tts_files[number] = f.name
-    st.audio(st.session_state.tts_files[number])
+# -----------------------------
+# MAIN AREA
+# -----------------------------
+st.title("👧 英文數字跟讀 v4.7")
+st.caption("左側設定 → 啟動錄音 → 播放老師發音 → 跟讀 → 提交")
 
-# =========================
-# 初始化 webrtc_streamer
-# =========================
-if "ctx_follow" not in st.session_state:
-    class AudioRecorder(AudioProcessorBase):
-        def __init__(self):
-            self.frames = []
-        def recv(self, frame):
-            if st.session_state.mic_on:
-                self.frames.append(frame.to_ndarray())
-            return frame
+if st.session_state.current_number < len(st.session_state.numbers_list):
+    number = st.session_state.numbers_list[st.session_state.current_number]
+    st.subheader(f"數字 {st.session_state.current_number+1} / {len(st.session_state.numbers_list)}")
+    st.markdown(f"<h1 style='text-align:center;'>{number}</h1>", unsafe_allow_html=True)
+else:
+    st.success("🎉 本輪練習完成！")
 
-    st.session_state.ctx_follow = webrtc_streamer(
-        key="follow_speech",
-        mode=WebRtcMode.SENDONLY,
-        audio_processor_factory=AudioRecorder,
-        media_stream_constraints={"audio": True, "video": False},
-        async_processing=True
-    )
+# -----------------------------
+# FUNCTIONS
+# -----------------------------
+def play_teacher_voice(num):
+    tts = gTTS(text=str(num), lang="en")
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tts.save(tmp_file.name)
+    st.audio(tmp_file.name)
+    tmp_file.close()
+    os.unlink(tmp_file.name)
 
-if "ctx_challenge" not in st.session_state:
-    class AudioRecorderC(AudioProcessorBase):
-        def __init__(self):
-            self.frames = []
-        def recv(self, frame):
-            if st.session_state.mic_on:
-                self.frames.append(frame.to_ndarray())
-            return frame
-
-    st.session_state.ctx_challenge = webrtc_streamer(
-        key="challenge_speech",
-        mode=WebRtcMode.SENDONLY,
-        audio_processor_factory=AudioRecorderC,
-        media_stream_constraints={"audio": True, "video": False},
-        async_processing=True
-    )
-
-# =========================
-# 初始化模式
-# =========================
-def init_challenge():
-    st.session_state.challenge_numbers = random.sample(range(start_n, end_n + 1), 10)
-    st.session_state.challenge_index = 0
-    st.session_state.challenge_correct = 0
-    st.session_state.challenge_finished = False
-    st.session_state.feedback = ""
-    st.session_state.last_score = None
-    st.session_state.frames_challenge = []
-
-def init_follow():
-    st.session_state.follow_numbers = list(range(start_n, end_n + 1))
-    st.session_state.follow_index = 0
-    st.session_state.follow_finished = False
-    st.session_state.feedback = ""
-    st.session_state.last_score = None
-    st.session_state.tts_played = False
-    st.session_state.frames_follow = []
-
-# =========================
-# START 控制
-# =========================
-if not st.session_state.start_pressed:
-    st.markdown("<p class='center'>請先設定左側參數並按 START</p>", unsafe_allow_html=True)
-    st.stop()
-
-if mode == "闖關模式":
-    if "challenge_numbers" not in st.session_state:
-        init_challenge()
-elif mode == "跟讀模式":
-    if "follow_numbers" not in st.session_state:
-        init_follow()
-
-# =========================
-# Mode: 跟讀模式
-# =========================
-if mode == "跟讀模式":
-    if st.session_state.follow_finished:
-        st.markdown(f"🎉 跟讀完成！太棒了！")
-        if st.button("重新開始"):
-            init_follow()
-        st.stop()
-
-    current_number = st.session_state.follow_numbers[st.session_state.follow_index]
-    st.markdown(f"數字 {current_number} / {st.session_state.follow_numbers[-1]}")
-    st.markdown(f"<h1>{current_number}</h1>", unsafe_allow_html=True)
-
-    col1, col2 = st.columns([1,3])
-    with col1:
-        if st.button("播放老師發音", key=f"play_{current_number}"):
-            play_tts(current_number)
-
-    if st.session_state.ctx_follow.audio_processor:
-        st.session_state.frames_follow += st.session_state.ctx_follow.audio_processor.frames
-        st.session_state.ctx_follow.audio_processor.frames = []
-
-    if st.button("提交錄音", key=f"submit_{current_number}"):
-        if st.session_state.mic_on and st.session_state.frames_follow:
-            audio = np.concatenate(st.session_state.frames_follow, axis=0)
-            import soundfile as sf
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-                sf.write(f.name, audio, 48000)
-                wav_path = f.name
-            recognizer = sr.Recognizer()
-            with sr.AudioFile(wav_path) as src:
-                audio_data = recognizer.record(src)
-            try:
-                result = recognizer.recognize_google(audio_data, language="en-US")
-            except:
-                result = ""
-            os.unlink(wav_path)
-            st.session_state.frames_follow = []
-
-            score = smart_score(num2words(current_number).replace("-", " "), result)
-            st.session_state.last_score = score
-            if score >= score_good:
-                st.session_state.feedback = "✅ 正確！"
-                st.session_state.follow_index += 1
-                if st.session_state.follow_index >= len(st.session_state.follow_numbers):
-                    st.session_state.follow_finished = True
-            elif score >= score_ok:
-                st.session_state.feedback = "🙂 再試一次就好！"
+def submit_recording():
+    if not st.session_state.mic_on or ctx.audio_receiver is None:
+        st.warning("⚠️ 尚未錄音或錄音無效！")
+        return
+    frames = ctx.audio_processor.frames
+    if len(frames) == 0:
+        st.warning("⚠️ 尚未錄音或錄音無效！")
+        return
+    # 保存錄音
+    audio_array = np.concatenate(frames, axis=0)
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    from scipy.io.wavfile import write
+    write(tmp_file.name, 16000, audio_array)
+    # 語音辨識
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(tmp_file.name) as source:
+        audio = recognizer.record(source)
+        try:
+            text = recognizer.recognize_google(audio)
+            st.info(f"辨識結果：{text}")
+            if str(number) in text or str(number) in text.lower():
+                st.success("✅ 發音正確！")
+                st.session_state.current_number += 1
             else:
-                st.session_state.feedback = "💪 再試！"
-        else:
-            st.session_state.feedback = "⚠️ 尚未錄音或錄音無效！"
+                st.warning("❌ 發音可能不正確，請再試一次！")
+        except:
+            st.warning("⚠️ 無法辨識錄音")
+    tmp_file.close()
+    os.unlink(tmp_file.name)
+    ctx.audio_processor.frames = []  # 清空錄音緩存
 
-    st.markdown(st.session_state.feedback)
+# -----------------------------
+# BUTTONS
+# -----------------------------
+col1, col2 = st.columns([1,1])
+with col1:
+    if st.button("播放老師發音"):
+        play_teacher_voice(number)
 
-# =========================
-# Mode: 闖關模式
-# =========================
-elif mode == "闖關模式":
-    if st.session_state.challenge_finished:
-        st.markdown(f"🎉 闖關完成！正確題數：{st.session_state.challenge_correct}/10")
-        if st.button("重新開始"):
-            init_challenge()
-        st.stop()
-
-    current_number = st.session_state.challenge_numbers[st.session_state.challenge_index]
-    st.markdown(f"題目 {st.session_state.challenge_index+1} / 10")
-    st.markdown(f"<h1>{current_number}</h1>", unsafe_allow_html=True)
-
-    col1, col2 = st.columns([1,3])
-    with col1:
-        if st.button("播放老師發音", key=f"play_ch_{current_number}"):
-            play_tts(current_number)
-
-    if st.session_state.ctx_challenge.audio_processor:
-        st.session_state.frames_challenge += st.session_state.ctx_challenge.audio_processor.frames
-        st.session_state.ctx_challenge.audio_processor.frames = []
-
-    if st.button("提交錄音", key=f"submit_ch_{current_number}"):
-        if st.session_state.mic_on and st.session_state.frames_challenge:
-            audio = np.concatenate(st.session_state.frames_challenge, axis=0)
-            import soundfile as sf
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-                sf.write(f.name, audio, 48000)
-                wav_path = f.name
-            recognizer = sr.Recognizer()
-            with sr.AudioFile(wav_path) as src:
-                audio_data = recognizer.record(src)
-            try:
-                result = recognizer.recognize_google(audio_data, language="en-US")
-            except:
-                result = ""
-            os.unlink(wav_path)
-            st.session_state.frames_challenge = []
-
-            score = smart_score(num2words(current_number).replace("-", " "), result)
-            st.session_state.last_score = score
-            if score >= score_good:
-                st.session_state.feedback = "✅ 正確！"
-                st.session_state.challenge_correct += 1
-            elif score >= score_ok:
-                st.session_state.feedback = "🙂 再試一次就好！"
-            else:
-                st.session_state.feedback = "💪 再試！"
-            st.session_state.challenge_index += 1
-            if st.session_state.challenge_index >= 10:
-                st.session_state.challenge_finished = True
-        else:
-            st.session_state.feedback = "⚠️ 尚未錄音或錄音無效！"
-
-    st.markdown(st.session_state.feedback)
+with col2:
+    if st.button("提交錄音"):
+        submit_recording()
