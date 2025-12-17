@@ -1,0 +1,8 @@
+streamlit
+streamlit-webrtc
+numpy
+gtts
+num2words
+SpeechRecognition
+rapidfuzz
+pydub
