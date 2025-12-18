@@ -430,45 +430,83 @@ st.markdown(f"<div class='progress-text'>{progress_text}</div>", unsafe_allow_ht
 # 顯示數字
 st.markdown(f"<div class='big-number'>{current_number}</div>", unsafe_allow_html=True)
 
-# 一鍵練習按鈕
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    if st.button("🎤 開始練習這個數字", use_container_width=True, type="primary", key="start_practice"):
-        st.session_state.phase = "playing"
-        audio_file = generate_tts(current_number)
-        st.audio(audio_file, format="audio/mp3", autoplay=True)
-        time.sleep(wait_after_teacher)
-        st.session_state.phase = "waiting"
-        st.rerun()
-
-# 根據不同階段顯示提示
-if st.session_state.phase == "waiting":
+# 流程控制
+if st.session_state.phase == "ready":
+    # 第一步：播放老師發音
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔊 第一步：聽老師發音", use_container_width=True, type="primary", key="play_teacher"):
+            audio_file = generate_tts(current_number)
+            st.audio(audio_file, format="audio/mp3", autoplay=True)
+            st.session_state.phase = "played"
+            st.rerun()
+    
     st.markdown("""
-    <div class='blink-text'>
-        🎙️ 換你練習囉！請開始說話！
+    <div style='text-align: center; margin: 30px 0; padding: 20px; background: #e3f2fd; border-radius: 10px;'>
+        <div style='font-size: 24px; color: #1976d2;'>
+            👆 點擊按鈕聽老師怎麼唸
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+elif st.session_state.phase == "played":
+    # 顯示已播放狀態
+    st.success("✅ 已播放老師發音")
+    
+    st.markdown("""
+    <div class='blink-text' style='margin: 30px 0;'>
+        🎙️ 換你練習囉！
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown(f"""
     <div style='text-align: center; margin: 20px 0;'>
-        <div style='font-size: 24px; color: #666; margin-bottom: 15px;'>
-            請在 {recording_duration} 秒內清楚唸出數字
+        <div style='font-size: 28px; color: #ff6b6b; font-weight: bold; margin-bottom: 20px;'>
+            👇 點擊下方的麥克風按鈕開始錄音 👇
+        </div>
+        <div style='font-size: 20px; color: #666;'>
+            建議錄音 {recording_duration} 秒
         </div>
     </div>
     """, unsafe_allow_html=True)
     
-    # 顯示錄音介面
-    col_a, col_b, col_c = st.columns([1, 3, 1])
+    # 錄音介面 - 直接顯示，不需要等待
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col_a, col_b, col_c = st.columns([1, 2, 1])
     with col_b:
+        st.markdown("""
+        <div style='padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                    border-radius: 15px; margin: 20px 0;'>
+            <div style='text-align: center; color: white; font-size: 24px; font-weight: bold; margin-bottom: 15px;'>
+                🎤 第二步：錄下你的發音
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
         audio_bytes = st.audio_input(
-            f"🔴 錄音中... (建議錄 {recording_duration} 秒)",
+            "點擊麥克風開始 → 錄音 → 再點一次停止",
             key=f"audio_{current_number}_{st.session_state.current_index}"
         )
     
+    # 說明文字
+    st.markdown("""
+    <div style='text-align: center; margin: 20px 0; padding: 15px; background: #fff9c4; border-radius: 10px;'>
+        <div style='font-size: 18px; color: #f57f17;'>
+            💡 <b>操作提示：</b><br>
+            1️⃣ 點擊上方的麥克風圖示（瀏覽器會詢問麥克風權限，請允許）<br>
+            2️⃣ 對著麥克風清楚地唸出數字<br>
+            3️⃣ 錄音完成後再點一次停止<br>
+            4️⃣ 系統會自動判斷你的發音
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
     if audio_bytes:
-        st.success("✅ 錄音完成！正在辨識中...")
+        st.balloons()
+        st.success("🎉 錄音完成！正在判斷中...")
         
-        with st.spinner("🔍 正在判斷你的發音..."):
+        with st.spinner("🔍 AI 正在仔細聆聽你的發音..."):
             feedback, score, is_correct, result = process_audio(
                 audio_bytes.getvalue(), 
                 target_word, 
@@ -486,6 +524,14 @@ if st.session_state.phase == "waiting":
                 st.session_state.challenge_correct += 1
             
             st.rerun()
+    
+    # 重新播放按鈕
+    st.markdown("<br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔄 再聽一次老師發音", use_container_width=True):
+            audio_file = generate_tts(current_number)
+            st.audio(audio_file, format="audio/mp3", autoplay=True)
 
 # 顯示結果
 if st.session_state.phase == "result":
